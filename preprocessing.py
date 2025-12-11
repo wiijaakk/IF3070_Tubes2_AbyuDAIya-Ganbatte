@@ -17,9 +17,9 @@ import json
 # TRAIN-TEST SPLIT
 # =============================================================================
 
-def train_test_split(X, y, test_size=0.2, random_state=None):
+def train_test_split(X, y, test_size=0.2, random_state=None, stratify=None):
     """
-    Manually split data into training and testing sets.
+    Manually split data into training and testing sets with optional stratification.
     
     Parameters:
     -----------
@@ -31,6 +31,8 @@ def train_test_split(X, y, test_size=0.2, random_state=None):
         Proportion of data for testing (0.0 to 1.0)
     random_state : int or None
         Seed for reproducibility
+    stratify : np.ndarray or None
+        If provided, split will maintain class proportions
     
     Returns:
     --------
@@ -43,18 +45,45 @@ def train_test_split(X, y, test_size=0.2, random_state=None):
         y = y.values.flatten()
     
     n_samples = len(X)
-    n_test = int(n_samples * test_size)
     
     # Set random seed for reproducibility
     if random_state is not None:
         np.random.seed(random_state)
     
-    # Generate shuffled indices
-    indices = np.random.permutation(n_samples)
-    
-    # Split indices
-    test_indices = indices[:n_test]
-    train_indices = indices[n_test:]
+    if stratify is not None:
+        # Stratified split - maintain class proportions
+        if isinstance(stratify, (pd.Series, pd.DataFrame)):
+            stratify = stratify.values.flatten()
+        
+        train_indices = []
+        test_indices = []
+        
+        # Get unique classes
+        classes = np.unique(stratify)
+        
+        for cls in classes:
+            # Get indices for this class
+            cls_indices = np.where(stratify == cls)[0]
+            np.random.shuffle(cls_indices)
+            
+            # Calculate split point for this class
+            n_test_cls = int(len(cls_indices) * test_size)
+            
+            test_indices.extend(cls_indices[:n_test_cls])
+            train_indices.extend(cls_indices[n_test_cls:])
+        
+        train_indices = np.array(train_indices)
+        test_indices = np.array(test_indices)
+        
+        # Shuffle the indices
+        np.random.shuffle(train_indices)
+        np.random.shuffle(test_indices)
+    else:
+        # Regular random split
+        indices = np.random.permutation(n_samples)
+        n_test = int(n_samples * test_size)
+        test_indices = indices[:n_test]
+        train_indices = indices[n_test:]
     
     X_train = X[train_indices]
     X_test = X[test_indices]
@@ -62,6 +91,73 @@ def train_test_split(X, y, test_size=0.2, random_state=None):
     y_test = y[test_indices]
     
     return X_train, X_test, y_train, y_test
+
+
+def k_fold_split(X, y, n_folds=5, random_state=None, stratify=True):
+    """
+    Generate K-Fold cross-validation splits.
+    
+    Parameters:
+    -----------
+    X : np.ndarray
+        Feature matrix
+    y : np.ndarray
+        Target vector
+    n_folds : int
+        Number of folds
+    random_state : int or None
+        Seed for reproducibility
+    stratify : bool
+        Whether to maintain class proportions in each fold
+    
+    Yields:
+    -------
+    X_train, X_val, y_train, y_val : tuple for each fold
+    """
+    if isinstance(X, pd.DataFrame):
+        X = X.values
+    if isinstance(y, (pd.Series, pd.DataFrame)):
+        y = y.values.flatten()
+    
+    n_samples = len(X)
+    
+    if random_state is not None:
+        np.random.seed(random_state)
+    
+    if stratify:
+        # Stratified K-Fold
+        classes = np.unique(y)
+        fold_indices = [[] for _ in range(n_folds)]
+        
+        for cls in classes:
+            cls_indices = np.where(y == cls)[0]
+            np.random.shuffle(cls_indices)
+            
+            # Distribute class samples across folds
+            for i, idx in enumerate(cls_indices):
+                fold_indices[i % n_folds].append(idx)
+        
+        # Convert to arrays
+        fold_indices = [np.array(fold) for fold in fold_indices]
+    else:
+        # Regular K-Fold
+        indices = np.random.permutation(n_samples)
+        fold_size = n_samples // n_folds
+        fold_indices = []
+        
+        for i in range(n_folds):
+            start = i * fold_size
+            if i == n_folds - 1:
+                fold_indices.append(indices[start:])
+            else:
+                fold_indices.append(indices[start:start + fold_size])
+    
+    # Generate train/val splits for each fold
+    for i in range(n_folds):
+        val_indices = fold_indices[i]
+        train_indices = np.concatenate([fold_indices[j] for j in range(n_folds) if j != i])
+        
+        yield X[train_indices], X[val_indices], y[train_indices], y[val_indices]
 
 
 # =============================================================================
@@ -338,13 +434,375 @@ class StandardScaler:
         return self
 
 
+class MinMaxScaler:
+    """
+    Min-Max normalization scaler.
+    Transforms features to a specified range (default 0 to 1).
+    
+    Formula: X_scaled = (X - min) / (max - min)
+    
+    This is implemented from scratch without using sklearn.
+    """
+    
+    def __init__(self, feature_range=(0, 1)):
+        self.feature_range = feature_range
+        self.mins = None
+        self.maxs = None
+        self.feature_names = None
+    
+    def fit(self, X):
+        """Compute min and max for each feature."""
+        if isinstance(X, pd.DataFrame):
+            self.feature_names = X.columns.tolist()
+            X = X.values
+        
+        self.mins = np.min(X, axis=0)
+        self.maxs = np.max(X, axis=0)
+        
+        # Avoid division by zero
+        diff = self.maxs - self.mins
+        diff[diff == 0] = 1.0
+        self.maxs = self.mins + diff
+        
+        return self
+    
+    def transform(self, X):
+        """Apply min-max normalization."""
+        if isinstance(X, pd.DataFrame):
+            X = X.values
+        
+        X_std = (X - self.mins) / (self.maxs - self.mins)
+        X_scaled = X_std * (self.feature_range[1] - self.feature_range[0]) + self.feature_range[0]
+        return X_scaled
+    
+    def fit_transform(self, X):
+        """Fit and transform in one step."""
+        self.fit(X)
+        return self.transform(X)
+    
+    def inverse_transform(self, X_scaled):
+        """Reverse the normalization."""
+        X_std = (X_scaled - self.feature_range[0]) / (self.feature_range[1] - self.feature_range[0])
+        return X_std * (self.maxs - self.mins) + self.mins
+
+
+# =============================================================================
+# OUTLIER HANDLING
+# =============================================================================
+
+def clip_outliers(X, lower_percentile=1, upper_percentile=99):
+    """
+    Clip outliers using percentile-based winsorization.
+    
+    Parameters:
+    -----------
+    X : np.ndarray or pd.DataFrame
+        Feature matrix
+    lower_percentile : float
+        Lower percentile for clipping (default: 1)
+    upper_percentile : float
+        Upper percentile for clipping (default: 99)
+    
+    Returns:
+    --------
+    X_clipped : np.ndarray
+    clip_bounds : dict
+        Dictionary with lower and upper bounds for each feature
+    """
+    if isinstance(X, pd.DataFrame):
+        X = X.values.copy()
+    else:
+        X = X.copy()
+    
+    n_features = X.shape[1]
+    clip_bounds = {'lower': [], 'upper': []}
+    
+    for i in range(n_features):
+        lower = np.percentile(X[:, i], lower_percentile)
+        upper = np.percentile(X[:, i], upper_percentile)
+        
+        clip_bounds['lower'].append(lower)
+        clip_bounds['upper'].append(upper)
+        
+        X[:, i] = np.clip(X[:, i], lower, upper)
+    
+    return X, clip_bounds
+
+
+def apply_clip_outliers(X, clip_bounds):
+    """Apply previously computed clip bounds to new data."""
+    if isinstance(X, pd.DataFrame):
+        X = X.values.copy()
+    else:
+        X = X.copy()
+    
+    for i in range(X.shape[1]):
+        X[:, i] = np.clip(X[:, i], clip_bounds['lower'][i], clip_bounds['upper'][i])
+    
+    return X
+
+
+# =============================================================================
+# FEATURE ENGINEERING
+# =============================================================================
+
+def create_polynomial_features(X, degree=2, interaction_only=False, include_bias=False):
+    """
+    Generate polynomial and interaction features.
+    
+    Parameters:
+    -----------
+    X : np.ndarray
+        Feature matrix of shape (n_samples, n_features)
+    degree : int
+        Maximum degree of polynomial features (default: 2)
+    interaction_only : bool
+        If True, only interaction features are produced (no x^2, x^3, etc.)
+    include_bias : bool
+        If True, include a bias column (all ones)
+    
+    Returns:
+    --------
+    X_poly : np.ndarray
+        Feature matrix with polynomial features
+    """
+    if isinstance(X, pd.DataFrame):
+        X = X.values
+    
+    n_samples, n_features = X.shape
+    
+    # Start with original features
+    features = [X]
+    
+    if include_bias:
+        features.insert(0, np.ones((n_samples, 1)))
+    
+    if degree >= 2:
+        # Add interaction terms (x_i * x_j for i < j)
+        for i in range(n_features):
+            for j in range(i, n_features):
+                if interaction_only and i == j:
+                    continue
+                features.append((X[:, i] * X[:, j]).reshape(-1, 1))
+    
+    if degree >= 3 and not interaction_only:
+        # Add cubic terms for individual features
+        for i in range(n_features):
+            features.append((X[:, i] ** 3).reshape(-1, 1))
+    
+    return np.hstack(features)
+
+
+def create_ratio_features(df, numerical_cols):
+    """
+    Create ratio features from numerical columns.
+    Select meaningful ratios based on domain knowledge.
+    
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        DataFrame with numerical columns
+    numerical_cols : list
+        List of numerical column names
+    
+    Returns:
+    --------
+    df_with_ratios : pd.DataFrame
+    """
+    df = df.copy()
+    
+    # Define meaningful ratio pairs for fraud detection
+    ratio_pairs = [
+        ('transaction_amount', 'avg_transaction_amount', 'amount_vs_avg_ratio'),
+        ('transaction_amount', 'std_transaction_amount', 'amount_vs_std_ratio'),
+        ('transactions_last_1h', 'transactions_last_24h', 'hourly_vs_daily_ratio'),
+        ('failed_login_attempts', 'num_prev_transactions', 'failed_vs_total_ratio'),
+        ('shared_ip_users', 'shared_device_users', 'ip_vs_device_shared_ratio'),
+    ]
+    
+    for num, denom, name in ratio_pairs:
+        if num in df.columns and denom in df.columns:
+            # Avoid division by zero
+            denom_safe = df[denom].replace(0, 1e-10)
+            df[name] = df[num] / denom_safe
+    
+    return df
+
+
+def create_log_features(df, numerical_cols, epsilon=1e-10):
+    """
+    Create log-transformed features for skewed distributions.
+    
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        DataFrame with numerical columns
+    numerical_cols : list
+        Columns to log-transform
+    epsilon : float
+        Small value to avoid log(0)
+    
+    Returns:
+    --------
+    df_with_logs : pd.DataFrame
+    """
+    df = df.copy()
+    
+    # Columns that typically benefit from log transform
+    log_candidates = [
+        'transaction_amount', 'avg_transaction_amount', 'std_transaction_amount',
+        'account_age_days', 'distance_from_home', 'num_prev_transactions'
+    ]
+    
+    for col in log_candidates:
+        if col in df.columns:
+            # Only log transform non-negative columns
+            min_val = df[col].min()
+            if min_val >= 0:
+                df[f'{col}_log'] = np.log1p(df[col])  # log(1 + x) for stability
+    
+    return df
+
+
+def create_interaction_features(df):
+    """
+    Create meaningful interaction features for fraud detection.
+    
+    These are domain-specific interaction terms that can capture
+    complex patterns in fraud behavior.
+    """
+    df = df.copy()
+    
+    # Risk Score Interactions
+    if 'ip_risk_score' in df.columns and 'device_trust_score' in df.columns:
+        # Combined risk indicator
+        df['risk_interaction'] = df['ip_risk_score'] * (1 - df['device_trust_score'] / 100)
+    
+    if 'merchant_risk' in df.columns and 'country_risk' in df.columns:
+        # Combined merchant-country risk
+        df['merchant_country_risk'] = df['merchant_risk'] * df['country_risk']
+    
+    # Transaction amount anomaly indicators
+    if 'transaction_amount' in df.columns and 'avg_transaction_amount' in df.columns:
+        # Z-score like feature
+        std_col = 'std_transaction_amount' if 'std_transaction_amount' in df.columns else None
+        if std_col and df[std_col].mean() > 0:
+            df['amount_zscore'] = (df['transaction_amount'] - df['avg_transaction_amount']) / (df[std_col] + 1e-6)
+    
+    # Velocity-based features
+    if 'transactions_last_24h' in df.columns and 'transactions_last_1h' in df.columns:
+        # Recent activity concentration
+        df['hourly_concentration'] = df['transactions_last_1h'] / (df['transactions_last_24h'] + 1)
+    
+    # Account trust features
+    if 'account_age_days' in df.columns and 'num_prev_transactions' in df.columns:
+        # Transaction frequency per day of account age
+        df['tx_per_day_age'] = df['num_prev_transactions'] / (df['account_age_days'] + 1)
+    
+    # New user risk
+    if 'is_new_country' in df.columns and 'distance_from_home' in df.columns:
+        df['new_location_distance'] = df['is_new_country'] * df['distance_from_home']
+    
+    # Failed login impact
+    if 'failed_login_attempts' in df.columns and 'transaction_amount' in df.columns:
+        df['failed_login_amount'] = df['failed_login_attempts'] * df['transaction_amount']
+    
+    # Shared resource risk
+    if 'shared_ip_users' in df.columns and 'shared_device_users' in df.columns:
+        df['total_shared_users'] = df['shared_ip_users'] + df['shared_device_users']
+        df['shared_resource_product'] = df['shared_ip_users'] * df['shared_device_users']
+    
+    # Time-based risk
+    if 'time_of_day' in df.columns:
+        # Night time risk (0-6 AM and 22-24)
+        df['is_night_time'] = ((df['time_of_day'] >= 0) & (df['time_of_day'] <= 6) | 
+                               (df['time_of_day'] >= 22)).astype(float)
+    
+    if 'day_of_week' in df.columns:
+        # Weekend indicator
+        df['is_weekend'] = (df['day_of_week'] >= 5).astype(float)
+    
+    # Chargeback history interaction
+    if 'has_chargeback_history' in df.columns and 'transaction_amount' in df.columns:
+        df['chargeback_high_amount'] = df['has_chargeback_history'] * (df['transaction_amount'] > df['transaction_amount'].median()).astype(float)
+    
+    # Additional high-value interaction features
+    if 'ip_risk_score' in df.columns and 'transaction_amount' in df.columns:
+        df['high_risk_high_amount'] = df['ip_risk_score'] * df['transaction_amount']
+    
+    if 'failed_login_attempts' in df.columns and 'ip_risk_score' in df.columns:
+        df['failed_login_risk'] = df['failed_login_attempts'] * df['ip_risk_score']
+    
+    if 'is_new_country' in df.columns and 'transaction_amount' in df.columns:
+        df['new_country_amount'] = df['is_new_country'] * df['transaction_amount']
+    
+    # Squared features for important risk indicators
+    if 'ip_risk_score' in df.columns:
+        df['ip_risk_squared'] = df['ip_risk_score'] ** 2
+    
+    if 'merchant_risk' in df.columns:
+        df['merchant_risk_squared'] = df['merchant_risk'] ** 2
+    
+    if 'country_risk' in df.columns:
+        df['country_risk_squared'] = df['country_risk'] ** 2
+    
+    # Combined risk score
+    risk_cols = []
+    if 'ip_risk_score' in df.columns:
+        risk_cols.append('ip_risk_score')
+    if 'merchant_risk' in df.columns:
+        risk_cols.append('merchant_risk')
+    if 'country_risk' in df.columns:
+        risk_cols.append('country_risk')
+    if len(risk_cols) > 0:
+        df['combined_risk'] = df[risk_cols].mean(axis=1)
+    
+    return df
+
+
+def create_binned_features(df, col, n_bins=5, strategy='quantile'):
+    """
+    Create binned (discretized) features from continuous variables.
+    
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        DataFrame
+    col : str
+        Column to bin
+    n_bins : int
+        Number of bins
+    strategy : str
+        'quantile' for equal-frequency bins, 'uniform' for equal-width bins
+    
+    Returns:
+    --------
+    df_with_bins : pd.DataFrame
+    bin_edges : np.ndarray
+    """
+    df = df.copy()
+    
+    if strategy == 'quantile':
+        bin_edges = np.percentile(df[col].dropna(), np.linspace(0, 100, n_bins + 1))
+    else:
+        bin_edges = np.linspace(df[col].min(), df[col].max(), n_bins + 1)
+    
+    # Make edges unique
+    bin_edges = np.unique(bin_edges)
+    
+    # Assign bins
+    df[f'{col}_bin'] = np.digitize(df[col], bin_edges[1:-1])
+    
+    return df, bin_edges
+
+
 # =============================================================================
 # FRAUD DATA PREPROCESSING PIPELINE
 # =============================================================================
 
-def preprocess_fraud_data(train_df, test_df):
+def preprocess_fraud_data(train_df, test_df, use_feature_engineering=True):
     """
-    Preprocess the fraud detection dataset.
+    Preprocess the fraud detection dataset with advanced feature engineering.
     
     Parameters:
     -----------
@@ -352,6 +810,8 @@ def preprocess_fraud_data(train_df, test_df):
         Training data with 'is_fraud' column
     test_df : pd.DataFrame
         Test data without 'is_fraud' column
+    use_feature_engineering : bool
+        Whether to apply advanced feature engineering (default: True)
     
     Returns:
     --------
@@ -396,6 +856,28 @@ def preprocess_fraud_data(train_df, test_df):
             mode_val = train_filled[col].mode()[0] if len(train_filled[col].mode()) > 0 else 'unknown'
             test_filled[col] = test_filled[col].fillna(mode_val)
     
+    # =========================================================================
+    # FEATURE ENGINEERING (NEW)
+    # =========================================================================
+    if use_feature_engineering:
+        print("\nApplying feature engineering...")
+        
+        # Create ratio features
+        train_filled = create_ratio_features(train_filled, numerical_cols)
+        test_filled = create_ratio_features(test_filled, numerical_cols)
+        
+        # Create log features for skewed distributions
+        train_filled = create_log_features(train_filled, numerical_cols)
+        test_filled = create_log_features(test_filled, numerical_cols)
+        
+        # Create interaction features (domain-specific combinations)
+        train_filled = create_interaction_features(train_filled)
+        test_filled = create_interaction_features(test_filled)
+        
+        # Update numerical columns list
+        numerical_cols = train_filled.select_dtypes(include=[np.number]).columns.tolist()
+        print(f"Features after engineering: {len(numerical_cols)} numerical, {len(categorical_cols)} categorical")
+    
     # One-hot encode categorical features
     train_encoded, encoding_info = one_hot_encode(train_filled, categorical_cols)
     test_encoded = apply_one_hot_encode(test_filled, encoding_info)
@@ -417,13 +899,20 @@ def preprocess_fraud_data(train_df, test_df):
     train_encoded = train_encoded[all_cols]
     test_encoded = test_encoded[all_cols]
     
-    print(f"\nFeatures after encoding: {train_encoded.shape[1]}")
-    print(f"Training samples: {len(train_encoded)}")
-    print(f"Test samples: {len(test_encoded)}")
+    # Clip outliers before scaling
+    train_values = train_encoded.values
+    test_values = test_encoded.values
+    
+    train_clipped, clip_bounds = clip_outliers(train_values, lower_percentile=1, upper_percentile=99)
+    test_clipped = apply_clip_outliers(test_values, clip_bounds)
+    
+    print(f"\nFeatures after encoding: {train_clipped.shape[1]}")
+    print(f"Training samples: {len(train_clipped)}")
+    print(f"Test samples: {len(test_clipped)}")
     
     # Scale features
     scaler = StandardScaler()
-    X_train = scaler.fit_transform(train_encoded)
-    X_test = scaler.transform(test_encoded)
+    X_train = scaler.fit_transform(train_clipped)
+    X_test = scaler.transform(test_clipped)
     
     return X_train, y_train, X_test, test_ids, scaler, encoding_info, imputation_values

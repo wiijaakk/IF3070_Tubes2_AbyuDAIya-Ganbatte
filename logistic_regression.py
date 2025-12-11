@@ -5,6 +5,15 @@ Tugas Besar 2 IF3070 – Dasar Inteligensi Artifisial
 This module implements Logistic Regression with multiple gradient descent optimizers
 using only numpy and pandas.
 
+Features:
+- Multiple optimizers: Batch GD, SGD, Mini-batch GD
+- Learning rate schedules: constant, step decay, exponential decay, cosine annealing
+- Momentum and Nesterov momentum
+- L1, L2, and Elastic Net regularization
+- Class weighting for imbalanced datasets
+- Early stopping with patience
+- Focal loss for hard example mining
+
 Author: AbyuDAIya-Ganbatte Team
 """
 
@@ -82,6 +91,122 @@ def f1_score(y_true, y_pred):
     return 2 * (prec * rec) / (prec + rec)
 
 
+def roc_auc_score(y_true, y_scores):
+    """
+    Calculate ROC AUC (Area Under the Receiver Operating Characteristic Curve).
+    
+    This is implemented from scratch using the trapezoidal rule.
+    AUC measures the model's ability to distinguish between classes.
+    
+    Parameters:
+    -----------
+    y_true : np.ndarray
+        True binary labels (0 or 1)
+    y_scores : np.ndarray
+        Predicted probabilities or scores for the positive class
+    
+    Returns:
+    --------
+    auc : float
+        AUC score between 0 and 1
+        - 1.0 = perfect classifier
+        - 0.5 = random classifier
+        - < 0.5 = worse than random
+    """
+    y_true = np.array(y_true).flatten()
+    y_scores = np.array(y_scores).flatten()
+    
+    # Get unique thresholds (sorted descending)
+    # Add boundary values
+    thresholds = np.unique(y_scores)
+    thresholds = np.concatenate([[thresholds.max() + 1], thresholds, [thresholds.min() - 1]])
+    thresholds = np.sort(thresholds)[::-1]  # Sort descending
+    
+    # Calculate TPR and FPR for each threshold
+    tpr_list = []  # True Positive Rate (Sensitivity/Recall)
+    fpr_list = []  # False Positive Rate (1 - Specificity)
+    
+    n_pos = np.sum(y_true == 1)
+    n_neg = np.sum(y_true == 0)
+    
+    if n_pos == 0 or n_neg == 0:
+        return 0.5  # Cannot compute AUC with only one class
+    
+    for thresh in thresholds:
+        y_pred = (y_scores >= thresh).astype(int)
+        
+        tp = np.sum((y_pred == 1) & (y_true == 1))
+        fp = np.sum((y_pred == 1) & (y_true == 0))
+        
+        tpr = tp / n_pos
+        fpr = fp / n_neg
+        
+        tpr_list.append(tpr)
+        fpr_list.append(fpr)
+    
+    tpr_array = np.array(tpr_list)
+    fpr_array = np.array(fpr_list)
+    
+    # Sort by FPR (ascending) for proper integration
+    sorted_indices = np.argsort(fpr_array)
+    fpr_sorted = fpr_array[sorted_indices]
+    tpr_sorted = tpr_array[sorted_indices]
+    
+    # Calculate AUC using trapezoidal rule
+    auc = np.trapz(tpr_sorted, fpr_sorted)
+    
+    return auc
+
+
+def roc_curve(y_true, y_scores, n_thresholds=100):
+    """
+    Calculate ROC curve points.
+    
+    Parameters:
+    -----------
+    y_true : np.ndarray
+        True binary labels
+    y_scores : np.ndarray
+        Predicted probabilities
+    n_thresholds : int
+        Number of threshold points to calculate
+    
+    Returns:
+    --------
+    fpr : np.ndarray
+        False positive rates
+    tpr : np.ndarray
+        True positive rates
+    thresholds : np.ndarray
+        Thresholds used
+    """
+    y_true = np.array(y_true).flatten()
+    y_scores = np.array(y_scores).flatten()
+    
+    # Generate thresholds
+    thresholds = np.linspace(0, 1, n_thresholds)
+    
+    n_pos = np.sum(y_true == 1)
+    n_neg = np.sum(y_true == 0)
+    
+    tpr_list = []
+    fpr_list = []
+    
+    for thresh in thresholds:
+        y_pred = (y_scores >= thresh).astype(int)
+        
+        tp = np.sum((y_pred == 1) & (y_true == 1))
+        fp = np.sum((y_pred == 1) & (y_true == 0))
+        
+        tpr = tp / n_pos if n_pos > 0 else 0
+        fpr = fp / n_neg if n_neg > 0 else 0
+        
+        tpr_list.append(tpr)
+        fpr_list.append(fpr)
+    
+    return np.array(fpr_list), np.array(tpr_list), thresholds
+
+
 def confusion_matrix(y_true, y_pred):
     """
     Calculate confusion matrix.
@@ -110,26 +235,36 @@ class LogisticRegression:
     """
     Logistic Regression classifier implemented from scratch.
     
-    This implementation supports three gradient descent optimization methods:
+    This implementation supports multiple advanced features:
+    
+    Optimization Methods:
+    ---------------------
     1. Batch Gradient Descent - Uses all samples for each update
     2. Stochastic Gradient Descent (SGD) - Uses one sample per update
     3. Mini-Batch Gradient Descent - Uses a subset of samples per update
     
-    Optimization Insights:
-    ----------------------
-    - Batch GD: Most stable convergence, but slow for large datasets.
-      Computes exact gradient using all samples.
+    Learning Rate Schedules:
+    ------------------------
+    - constant: Fixed learning rate
+    - step: Reduce by factor every N epochs
+    - exponential: Exponentially decay learning rate
+    - cosine: Cosine annealing schedule
     
-    - SGD: Fastest per iteration, but noisy updates can cause oscillation.
-      The randomness can help escape local minima.
+    Regularization:
+    ---------------
+    - L2 (Ridge): Penalizes large weights, prevents overfitting
+    - L1 (Lasso): Encourages sparsity, feature selection
+    - Elastic Net: Combination of L1 and L2
     
-    - Mini-Batch GD: Best of both worlds - more stable than SGD,
-      faster than Batch GD. Commonly used in practice.
+    Loss Functions:
+    ---------------
+    - Binary Cross-Entropy: Standard logistic loss
+    - Focal Loss: Down-weights easy examples, focuses on hard ones
     
     Parameters:
     -----------
     learning_rate : float
-        Step size for gradient descent (default: 0.01)
+        Initial step size for gradient descent (default: 0.01)
     n_iterations : int
         Number of training iterations (default: 1000)
     optimizer : str
@@ -137,9 +272,25 @@ class LogisticRegression:
     batch_size : int or None
         Batch size for mini-batch gradient descent (default: 32 if mini-batch)
     regularization : float
-        L2 regularization strength (default: 0.0, no regularization)
+        L2 regularization strength (default: 0.0)
+    l1_ratio : float
+        Ratio of L1 regularization (0 = pure L2, 1 = pure L1) (default: 0.0)
     class_weight : str or None
         If "balanced", automatically adjust weights inversely proportional to class frequencies
+    lr_schedule : str
+        Learning rate schedule: "constant", "step", "exponential", "cosine" (default: "constant")
+    lr_decay : float
+        Decay factor for learning rate schedule (default: 0.1)
+    lr_decay_steps : int
+        Steps between learning rate reductions for step schedule (default: 100)
+    momentum : float
+        Momentum factor for gradient updates (default: 0.0)
+    nesterov : bool
+        Whether to use Nesterov momentum (default: False)
+    use_focal_loss : bool
+        Whether to use focal loss instead of BCE (default: False)
+    focal_gamma : float
+        Focusing parameter for focal loss (default: 2.0)
     early_stopping : bool
         Whether to use early stopping (default: True)
     patience : int
@@ -148,27 +299,28 @@ class LogisticRegression:
         Minimum improvement to consider as progress (default: 1e-5)
     verbose : bool
         Whether to print progress during training (default: True)
-    
-    Attributes:
-    -----------
-    weights : np.ndarray
-        Model weights (coefficients)
-    bias : float
-        Model bias (intercept)
-    loss_history : list
-        History of loss values during training
-    weight_history : list
-        History of weight values during training (for visualization)
     """
     
     def __init__(self, learning_rate=0.01, n_iterations=1000, optimizer="batch", 
-                 batch_size=None, regularization=0.0, class_weight=None,
+                 batch_size=None, regularization=0.0, l1_ratio=0.0, class_weight=None,
+                 lr_schedule="constant", lr_decay=0.1, lr_decay_steps=100,
+                 momentum=0.0, nesterov=False,
+                 use_focal_loss=False, focal_gamma=2.0,
                  early_stopping=True, patience=10, tol=1e-5, verbose=True):
         self.learning_rate = learning_rate
+        self.initial_lr = learning_rate
         self.n_iterations = n_iterations
         self.optimizer = optimizer.lower()
         self.regularization = regularization
+        self.l1_ratio = l1_ratio  # 0 = L2, 1 = L1, between = Elastic Net
         self.class_weight = class_weight
+        self.lr_schedule = lr_schedule
+        self.lr_decay = lr_decay
+        self.lr_decay_steps = lr_decay_steps
+        self.momentum = momentum
+        self.nesterov = nesterov
+        self.use_focal_loss = use_focal_loss
+        self.focal_gamma = focal_gamma
         self.early_stopping = early_stopping
         self.patience = patience
         self.tol = tol
@@ -184,12 +336,45 @@ class LogisticRegression:
         self.weights = None
         self.bias = None
         
+        # Momentum velocities
+        self.velocity_w = None
+        self.velocity_b = None
+        
         # Class weights (computed during fit if class_weight="balanced")
         self.class_weights_ = None
         
         # History for visualization
         self.loss_history = []
         self.weight_history = []
+        self.lr_history = []
+    
+    def _get_learning_rate(self, iteration):
+        """
+        Get learning rate based on schedule.
+        
+        Learning Rate Schedules:
+        - constant: lr = lr_0
+        - step: lr = lr_0 * decay^(iteration // decay_steps)
+        - exponential: lr = lr_0 * decay^iteration
+        - cosine: lr = lr_0 * (1 + cos(π * iteration / n_iterations)) / 2
+        """
+        if self.lr_schedule == "constant":
+            return self.initial_lr
+        
+        elif self.lr_schedule == "step":
+            # Reduce learning rate every lr_decay_steps iterations
+            return self.initial_lr * (self.lr_decay ** (iteration // self.lr_decay_steps))
+        
+        elif self.lr_schedule == "exponential":
+            # Exponential decay
+            return self.initial_lr * (self.lr_decay ** (iteration / self.n_iterations))
+        
+        elif self.lr_schedule == "cosine":
+            # Cosine annealing
+            return self.initial_lr * (1 + np.cos(np.pi * iteration / self.n_iterations)) / 2
+        
+        else:
+            return self.initial_lr
     
     def sigmoid(self, z):
         """
@@ -198,16 +383,6 @@ class LogisticRegression:
         σ(z) = 1 / (1 + e^(-z))
         
         Numerically stable implementation to avoid overflow.
-        
-        Parameters:
-        -----------
-        z : np.ndarray
-            Linear combination of inputs and weights
-        
-        Returns:
-        --------
-        sigmoid_z : np.ndarray
-            Values between 0 and 1
         """
         # Clip values to avoid overflow in exp
         z = np.clip(z, -500, 500)
@@ -229,23 +404,14 @@ class LogisticRegression:
     
     def compute_loss(self, y_true, y_pred, sample_weights=None):
         """
-        Compute the binary cross-entropy (log) loss with optional sample weights.
+        Compute the loss function.
         
-        Loss = -1/n * Σ[w * (y*log(p) + (1-y)*log(1-p))] + λ/2 * ||w||²
+        Supports:
+        - Binary Cross-Entropy: -1/n * Σ[w * (y*log(p) + (1-y)*log(1-p))]
+        - Focal Loss: -1/n * Σ[w * (1-p_t)^γ * log(p_t)]
+          where p_t = p if y=1, else 1-p
         
-        Parameters:
-        -----------
-        y_true : np.ndarray
-            True binary labels (0 or 1)
-        y_pred : np.ndarray
-            Predicted probabilities
-        sample_weights : np.ndarray or None
-            Per-sample weights for handling class imbalance
-        
-        Returns:
-        --------
-        loss : float
-            Binary cross-entropy loss value
+        Plus regularization term: λ/2 * (α||w||₁ + (1-α)||w||₂²)
         """
         n_samples = len(y_true)
         
@@ -253,8 +419,15 @@ class LogisticRegression:
         epsilon = 1e-15
         y_pred = np.clip(y_pred, epsilon, 1 - epsilon)
         
-        # Binary cross-entropy loss per sample
-        loss_per_sample = -(y_true * np.log(y_pred) + (1 - y_true) * np.log(1 - y_pred))
+        if self.use_focal_loss:
+            # Focal Loss: focuses training on hard examples
+            # FL(p_t) = -(1 - p_t)^γ * log(p_t)
+            p_t = np.where(y_true == 1, y_pred, 1 - y_pred)
+            focal_weight = (1 - p_t) ** self.focal_gamma
+            loss_per_sample = -focal_weight * np.log(p_t)
+        else:
+            # Binary Cross-Entropy Loss
+            loss_per_sample = -(y_true * np.log(y_pred) + (1 - y_true) * np.log(1 - y_pred))
         
         # Apply sample weights if provided
         if sample_weights is not None:
@@ -262,36 +435,43 @@ class LogisticRegression:
         else:
             loss = np.mean(loss_per_sample)
         
-        # Add L2 regularization term
+        # Add regularization term (Elastic Net: combination of L1 and L2)
         if self.regularization > 0 and self.weights is not None:
-            loss += (self.regularization / 2) * np.sum(self.weights ** 2)
+            l1_term = self.l1_ratio * np.sum(np.abs(self.weights))
+            l2_term = (1 - self.l1_ratio) * 0.5 * np.sum(self.weights ** 2)
+            loss += self.regularization * (l1_term + l2_term)
         
         return loss
     
     def _compute_gradients(self, X, y, y_pred, sample_weights=None):
         """
-        Compute gradients for weights and bias with optional sample weights.
+        Compute gradients for weights and bias.
         
-        Parameters:
-        -----------
-        X : np.ndarray
-            Feature matrix
-        y : np.ndarray
-            True labels
-        y_pred : np.ndarray
-            Predicted probabilities
-        sample_weights : np.ndarray or None
-            Per-sample weights
-        
-        Returns:
-        --------
-        dw, db : tuple
-            Gradients for weights and bias
+        For focal loss, the gradient is modified to account for the focusing term.
         """
         n_samples = len(y)
         
-        # Compute error
-        error = y_pred - y
+        if self.use_focal_loss:
+            # Focal loss gradients
+            epsilon = 1e-15
+            y_pred_clipped = np.clip(y_pred, epsilon, 1 - epsilon)
+            p_t = np.where(y == 1, y_pred_clipped, 1 - y_pred_clipped)
+            
+            # Gradient of focal loss
+            gamma = self.focal_gamma
+            focal_weight = (1 - p_t) ** gamma
+            
+            # Complex gradient for focal loss
+            grad_p = np.where(
+                y == 1,
+                -focal_weight * (gamma * (1 - y_pred_clipped) * np.log(y_pred_clipped + epsilon) + 1) / (y_pred_clipped + epsilon),
+                focal_weight * (gamma * y_pred_clipped * np.log(1 - y_pred_clipped + epsilon) + 1) / (1 - y_pred_clipped + epsilon)
+            )
+            
+            error = grad_p * y_pred_clipped * (1 - y_pred_clipped)  # Chain rule with sigmoid derivative
+        else:
+            # Standard BCE gradient
+            error = y_pred - y
         
         # Apply sample weights if provided
         if sample_weights is not None:
@@ -302,27 +482,38 @@ class LogisticRegression:
             dw = (1 / n_samples) * np.dot(X.T, error)
             db = (1 / n_samples) * np.sum(error)
         
-        # Add L2 regularization gradient
+        # Add regularization gradient (Elastic Net)
         if self.regularization > 0:
-            dw += self.regularization * self.weights
+            # L2 gradient
+            l2_grad = (1 - self.l1_ratio) * self.weights
+            # L1 gradient (subgradient)
+            l1_grad = self.l1_ratio * np.sign(self.weights)
+            dw += self.regularization * (l1_grad + l2_grad)
         
         return dw, db
+    
+    def _update_parameters(self, dw, db, lr):
+        """
+        Update parameters with optional momentum.
+        
+        Standard momentum: v = μ*v - lr*grad; w = w + v
+        Nesterov momentum: Look ahead before computing gradient
+        """
+        if self.momentum > 0:
+            # Momentum update
+            self.velocity_w = self.momentum * self.velocity_w - lr * dw
+            self.velocity_b = self.momentum * self.velocity_b - lr * db
+            
+            self.weights += self.velocity_w
+            self.bias += self.velocity_b
+        else:
+            # Standard gradient descent update
+            self.weights -= lr * dw
+            self.bias -= lr * db
     
     def fit(self, X, y):
         """
         Train the logistic regression model using gradient descent.
-        
-        Parameters:
-        -----------
-        X : np.ndarray
-            Training feature matrix of shape (n_samples, n_features)
-        y : np.ndarray
-            Training labels of shape (n_samples,)
-        
-        Returns:
-        --------
-        self : LogisticRegression
-            Trained model
         """
         # Convert to numpy arrays if needed
         if isinstance(X, pd.DataFrame):
@@ -332,10 +523,14 @@ class LogisticRegression:
         
         n_samples, n_features = X.shape
         
-        # Initialize weights with small random values for better convergence
+        # Initialize weights with small random values (Xavier initialization)
         np.random.seed(42)
-        self.weights = np.random.randn(n_features) * 0.01
+        self.weights = np.random.randn(n_features) * np.sqrt(2.0 / n_features)
         self.bias = 0.0
+        
+        # Initialize momentum velocities
+        self.velocity_w = np.zeros(n_features)
+        self.velocity_b = 0.0
         
         # Compute class weights if specified
         if self.class_weight == "balanced":
@@ -355,6 +550,7 @@ class LogisticRegression:
         # Clear histories
         self.loss_history = []
         self.weight_history = []
+        self.lr_history = []
         
         # Store initial weights
         self.weight_history.append(self.weights.copy())
@@ -374,13 +570,23 @@ class LogisticRegression:
     
     def _fit_batch(self, X, y, sample_weights=None):
         """
-        Batch Gradient Descent: Use ALL samples for each weight update.
+        Batch Gradient Descent with momentum and learning rate schedule.
         """
-        n_samples = len(y)
         best_loss = float('inf')
         patience_counter = 0
+        best_weights = self.weights.copy()
+        best_bias = self.bias
         
         for iteration in range(self.n_iterations):
+            # Get current learning rate
+            lr = self._get_learning_rate(iteration)
+            self.lr_history.append(lr)
+            
+            # For Nesterov momentum, look ahead
+            if self.nesterov and self.momentum > 0:
+                self.weights += self.momentum * self.velocity_w
+                self.bias += self.momentum * self.velocity_b
+            
             # Forward pass
             z = np.dot(X, self.weights) + self.bias
             y_pred = self.sigmoid(z)
@@ -393,20 +599,24 @@ class LogisticRegression:
             if self.early_stopping:
                 if loss < best_loss - self.tol:
                     best_loss = loss
+                    best_weights = self.weights.copy()
+                    best_bias = self.bias
                     patience_counter = 0
                 else:
                     patience_counter += 1
                     if patience_counter >= self.patience:
                         if self.verbose:
                             print(f"Early stopping at iteration {iteration}, loss: {loss:.6f}")
+                        # Restore best weights
+                        self.weights = best_weights
+                        self.bias = best_bias
                         break
             
             # Compute gradients
             dw, db = self._compute_gradients(X, y, y_pred, sample_weights)
             
             # Update parameters
-            self.weights -= self.learning_rate * dw
-            self.bias -= self.learning_rate * db
+            self._update_parameters(dw, db, lr)
             
             # Store weights for visualization
             if iteration % 10 == 0:
@@ -414,17 +624,22 @@ class LogisticRegression:
             
             # Print progress
             if self.verbose and iteration % 50 == 0:
-                print(f"Iteration {iteration}: loss = {loss:.6f}")
+                print(f"Iteration {iteration}: loss = {loss:.6f}, lr = {lr:.6f}")
         
         self.weight_history.append(self.weights.copy())
     
     def _fit_sgd(self, X, y, sample_weights=None):
         """
-        Stochastic Gradient Descent: Use ONE sample for each weight update.
+        Stochastic Gradient Descent with momentum.
         """
         n_samples = len(y)
+        best_loss = float('inf')
+        patience_counter = 0
         
         for iteration in range(self.n_iterations):
+            lr = self._get_learning_rate(iteration)
+            self.lr_history.append(lr)
+            
             indices = np.random.permutation(n_samples)
             
             for i in indices:
@@ -436,9 +651,7 @@ class LogisticRegression:
                 y_pred = self.sigmoid(z)
                 
                 dw, db = self._compute_gradients(xi, yi, y_pred, sw_i)
-                
-                self.weights -= self.learning_rate * dw
-                self.bias -= self.learning_rate * db
+                self._update_parameters(dw, db, lr)
             
             # Compute loss at end of epoch
             z_full = np.dot(X, self.weights) + self.bias
@@ -446,48 +659,7 @@ class LogisticRegression:
             loss = self.compute_loss(y, y_pred_full, sample_weights)
             self.loss_history.append(loss)
             
-            if iteration % 10 == 0:
-                self.weight_history.append(self.weights.copy())
-        
-        self.weight_history.append(self.weights.copy())
-    
-    def _fit_mini_batch(self, X, y, sample_weights=None):
-        """
-        Mini-Batch Gradient Descent: Use a SUBSET of samples for each update.
-        """
-        n_samples = len(y)
-        batch_size = min(self.batch_size, n_samples)
-        best_loss = float('inf')
-        patience_counter = 0
-        
-        for iteration in range(self.n_iterations):
-            indices = np.random.permutation(n_samples)
-            X_shuffled = X[indices]
-            y_shuffled = y[indices]
-            sw_shuffled = sample_weights[indices] if sample_weights is not None else None
-            
-            for start_idx in range(0, n_samples, batch_size):
-                end_idx = min(start_idx + batch_size, n_samples)
-                
-                X_batch = X_shuffled[start_idx:end_idx]
-                y_batch = y_shuffled[start_idx:end_idx]
-                sw_batch = sw_shuffled[start_idx:end_idx] if sw_shuffled is not None else None
-                
-                z = np.dot(X_batch, self.weights) + self.bias
-                y_pred = self.sigmoid(z)
-                
-                dw, db = self._compute_gradients(X_batch, y_batch, y_pred, sw_batch)
-                
-                self.weights -= self.learning_rate * dw
-                self.bias -= self.learning_rate * db
-            
-            # Compute loss at end of epoch
-            z_full = np.dot(X, self.weights) + self.bias
-            y_pred_full = self.sigmoid(z_full)
-            loss = self.compute_loss(y, y_pred_full, sample_weights)
-            self.loss_history.append(loss)
-            
-            # Early stopping check
+            # Early stopping
             if self.early_stopping:
                 if loss < best_loss - self.tol:
                     best_loss = loss
@@ -503,24 +675,80 @@ class LogisticRegression:
                 self.weight_history.append(self.weights.copy())
             
             if self.verbose and iteration % 50 == 0:
-                print(f"Iteration {iteration}: loss = {loss:.6f}")
+                print(f"Iteration {iteration}: loss = {loss:.6f}, lr = {lr:.6f}")
+        
+        self.weight_history.append(self.weights.copy())
+    
+    def _fit_mini_batch(self, X, y, sample_weights=None):
+        """
+        Mini-Batch Gradient Descent with momentum and learning rate schedule.
+        """
+        n_samples = len(y)
+        batch_size = min(self.batch_size, n_samples)
+        best_loss = float('inf')
+        patience_counter = 0
+        best_weights = self.weights.copy()
+        best_bias = self.bias
+        
+        for iteration in range(self.n_iterations):
+            lr = self._get_learning_rate(iteration)
+            self.lr_history.append(lr)
+            
+            indices = np.random.permutation(n_samples)
+            X_shuffled = X[indices]
+            y_shuffled = y[indices]
+            sw_shuffled = sample_weights[indices] if sample_weights is not None else None
+            
+            for start_idx in range(0, n_samples, batch_size):
+                end_idx = min(start_idx + batch_size, n_samples)
+                
+                X_batch = X_shuffled[start_idx:end_idx]
+                y_batch = y_shuffled[start_idx:end_idx]
+                sw_batch = sw_shuffled[start_idx:end_idx] if sw_shuffled is not None else None
+                
+                # For Nesterov momentum
+                if self.nesterov and self.momentum > 0:
+                    self.weights += self.momentum * self.velocity_w
+                    self.bias += self.momentum * self.velocity_b
+                
+                z = np.dot(X_batch, self.weights) + self.bias
+                y_pred = self.sigmoid(z)
+                
+                dw, db = self._compute_gradients(X_batch, y_batch, y_pred, sw_batch)
+                self._update_parameters(dw, db, lr)
+            
+            # Compute loss at end of epoch
+            z_full = np.dot(X, self.weights) + self.bias
+            y_pred_full = self.sigmoid(z_full)
+            loss = self.compute_loss(y, y_pred_full, sample_weights)
+            self.loss_history.append(loss)
+            
+            # Early stopping check
+            if self.early_stopping:
+                if loss < best_loss - self.tol:
+                    best_loss = loss
+                    best_weights = self.weights.copy()
+                    best_bias = self.bias
+                    patience_counter = 0
+                else:
+                    patience_counter += 1
+                    if patience_counter >= self.patience:
+                        if self.verbose:
+                            print(f"Early stopping at iteration {iteration}, loss: {loss:.6f}")
+                        self.weights = best_weights
+                        self.bias = best_bias
+                        break
+            
+            if iteration % 10 == 0:
+                self.weight_history.append(self.weights.copy())
+            
+            if self.verbose and iteration % 50 == 0:
+                print(f"Iteration {iteration}: loss = {loss:.6f}, lr = {lr:.6f}")
         
         self.weight_history.append(self.weights.copy())
     
     def predict_proba(self, X):
-        """
-        Predict class probabilities for samples.
-        
-        Parameters:
-        -----------
-        X : np.ndarray
-            Feature matrix of shape (n_samples, n_features)
-        
-        Returns:
-        --------
-        probabilities : np.ndarray
-            Predicted probabilities for the positive class
-        """
+        """Predict class probabilities for samples."""
         if isinstance(X, pd.DataFrame):
             X = X.values
         
@@ -528,21 +756,7 @@ class LogisticRegression:
         return self.sigmoid(z)
     
     def predict(self, X, threshold=0.5):
-        """
-        Predict binary class labels for samples.
-        
-        Parameters:
-        -----------
-        X : np.ndarray
-            Feature matrix of shape (n_samples, n_features)
-        threshold : float
-            Decision threshold (default: 0.5)
-        
-        Returns:
-        --------
-        predictions : np.ndarray
-            Predicted binary labels (0 or 1)
-        """
+        """Predict binary class labels for samples."""
         probabilities = self.predict_proba(X)
         return (probabilities >= threshold).astype(int)
     
@@ -553,6 +767,10 @@ class LogisticRegression:
     def get_weight_history(self):
         """Get the history of weight values during training."""
         return self.weight_history
+    
+    def get_lr_history(self):
+        """Get the history of learning rates during training."""
+        return self.lr_history
     
     def get_params(self):
         """Get the model parameters."""
@@ -566,14 +784,7 @@ class LogisticRegression:
         }
     
     def save_model(self, filename):
-        """
-        Save the trained model to a file.
-        
-        Parameters:
-        -----------
-        filename : str
-            Path to save the model (JSON format)
-        """
+        """Save the trained model to a file."""
         if self.weights is None:
             raise ValueError("Model has not been trained yet!")
         
@@ -584,8 +795,15 @@ class LogisticRegression:
             'n_iterations': self.n_iterations,
             'optimizer': self.optimizer,
             'batch_size': self.batch_size,
+            'regularization': self.regularization,
+            'l1_ratio': self.l1_ratio,
+            'momentum': self.momentum,
+            'lr_schedule': self.lr_schedule,
+            'use_focal_loss': self.use_focal_loss,
+            'focal_gamma': self.focal_gamma,
             'loss_history': self.loss_history,
-            'weight_history': [w.tolist() for w in self.weight_history]
+            'weight_history': [w.tolist() for w in self.weight_history],
+            'lr_history': self.lr_history
         }
         
         with open(filename, 'w') as f:
@@ -594,19 +812,7 @@ class LogisticRegression:
         print(f"Model saved to {filename}")
     
     def load_model(self, filename):
-        """
-        Load a trained model from a file.
-        
-        Parameters:
-        -----------
-        filename : str
-            Path to the saved model file
-        
-        Returns:
-        --------
-        self : LogisticRegression
-            Loaded model
-        """
+        """Load a trained model from a file."""
         with open(filename, 'r') as f:
             model_data = json.load(f)
         
@@ -616,8 +822,9 @@ class LogisticRegression:
         self.n_iterations = model_data['n_iterations']
         self.optimizer = model_data['optimizer']
         self.batch_size = model_data['batch_size']
-        self.loss_history = model_data['loss_history']
-        self.weight_history = [np.array(w) for w in model_data['weight_history']]
+        self.loss_history = model_data.get('loss_history', [])
+        self.weight_history = [np.array(w) for w in model_data.get('weight_history', [])]
+        self.lr_history = model_data.get('lr_history', [])
         
         print(f"Model loaded from {filename}")
         return self
