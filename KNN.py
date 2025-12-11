@@ -26,12 +26,12 @@ class KNN:
         self.X_train = np.array(X_train)
         self.y_train = np.array(y_train)
 
-    def predict(self, X, verbose=False):
+    def predict(self, X, show_progress=False):
         X = np.array(X)
         predictions = []
         n = len(X)
         for i, x in enumerate(X):
-            if verbose and (i + 1) % 1000 == 0:
+            if show_progress and (i + 1) % 1000 == 0:
                 print(f"  Progress: {i+1}/{n}")
             predictions.append(self._predict(x))
         return np.array(predictions)
@@ -177,6 +177,6 @@ if __name__ == "__main__":
     
     # Create submission
     print("Predicting test set...")
-    y_test_pred = knn.predict(X_test, verbose=True)
+    y_test_pred = knn.predict(X_test, show_progress=True)
     create_submission(test_ids, y_test_pred)
     print("Done! Submission saved to knn_submission.csv")
