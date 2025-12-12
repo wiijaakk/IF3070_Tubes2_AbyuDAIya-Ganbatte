@@ -289,23 +289,26 @@ def main():
     print(f"Processed test shape: {X_test_processed.shape}")
     
     # =========================================================================
-    # 3. Model Parameters
+    # 3. Model Parameters - Using ADAM Optimizer
     # =========================================================================
     model_params = {
-        'learning_rate': 0.07,
+        'learning_rate': 0.0012,  # Trying lower lr
         'n_iterations': 3000,
-        'optimizer': "mini-batch",
+        'optimizer': "adam",  # ADAM OPTIMIZER
         'batch_size': 256,
-        'regularization': 0.0012,
+        'regularization': 0.0005,
         'l1_ratio': 0.5,  # Balanced L1/L2
         'class_weight': "balanced",  # Use balanced class weights
-        'lr_schedule': "constant",
-        'momentum': 0.0,
+        'lr_schedule': "constant",  # Adam usually works best with constant lr
+        'beta1': 0.9,  # First moment decay (momentum-like)
+        'beta2': 0.999,  # Second moment decay (RMSprop-like)
+        'epsilon': 1e-8,  # Numerical stability
+        'momentum': 0.0,  # Not used for Adam
         'nesterov': False,
         'use_focal_loss': False,
         'focal_gamma': 2.0,
         'early_stopping': True,
-        'patience': 260,
+        'patience': 400,
         'tol': 1e-9,
         'verbose': True
     }

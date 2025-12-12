@@ -305,6 +305,8 @@ class LogisticRegression:
                  batch_size=None, regularization=0.0, l1_ratio=0.0, class_weight=None,
                  lr_schedule="constant", lr_decay=0.1, lr_decay_steps=100,
                  momentum=0.0, nesterov=False,
+                 # PARAMETER BARU UNTUK ADAM:
+                 beta1=0.9, beta2=0.999, epsilon=1e-8,
                  use_focal_loss=False, focal_gamma=2.0,
                  early_stopping=True, patience=10, tol=1e-5, verbose=True):
         self.learning_rate = learning_rate
@@ -319,6 +321,12 @@ class LogisticRegression:
         self.lr_decay_steps = lr_decay_steps
         self.momentum = momentum
         self.nesterov = nesterov
+        
+        # Adam optimizer parameters
+        self.beta1 = beta1
+        self.beta2 = beta2
+        self.epsilon = epsilon
+        
         self.use_focal_loss = use_focal_loss
         self.focal_gamma = focal_gamma
         self.early_stopping = early_stopping
@@ -339,6 +347,13 @@ class LogisticRegression:
         # Momentum velocities
         self.velocity_w = None
         self.velocity_b = None
+        
+        # Adam optimizer moments
+        self.m_w = None  # First moment estimate (mean of gradients)
+        self.v_w = None  # Second moment estimate (uncentered variance)
+        self.m_b = None
+        self.v_b = None
+        self.t = 0  # Timestep for Adam
         
         # Class weights (computed during fit if class_weight="balanced")
         self.class_weights_ = None
@@ -562,9 +577,11 @@ class LogisticRegression:
             self._fit_sgd(X, y, sample_weights)
         elif self.optimizer == "mini-batch":
             self._fit_mini_batch(X, y, sample_weights)
+        elif self.optimizer == "adam":
+            self._fit_adam(X, y, sample_weights)
         else:
             raise ValueError(f"Unknown optimizer: {self.optimizer}. "
-                           f"Choose from 'batch', 'sgd', or 'mini-batch'.")
+                           f"Choose from 'batch', 'sgd', 'mini-batch', or 'adam'.")
         
         return self
     
@@ -716,6 +733,124 @@ class LogisticRegression:
                 
                 dw, db = self._compute_gradients(X_batch, y_batch, y_pred, sw_batch)
                 self._update_parameters(dw, db, lr)
+            
+            # Compute loss at end of epoch
+            z_full = np.dot(X, self.weights) + self.bias
+            y_pred_full = self.sigmoid(z_full)
+            loss = self.compute_loss(y, y_pred_full, sample_weights)
+            self.loss_history.append(loss)
+            
+            # Early stopping check
+            if self.early_stopping:
+                if loss < best_loss - self.tol:
+                    best_loss = loss
+                    best_weights = self.weights.copy()
+                    best_bias = self.bias
+                    patience_counter = 0
+                else:
+                    patience_counter += 1
+                    if patience_counter >= self.patience:
+                        if self.verbose:
+                            print(f"Early stopping at iteration {iteration}, loss: {loss:.6f}")
+                        self.weights = best_weights
+                        self.bias = best_bias
+                        break
+            
+            if iteration % 10 == 0:
+                self.weight_history.append(self.weights.copy())
+            
+            if self.verbose and iteration % 50 == 0:
+                print(f"Iteration {iteration}: loss = {loss:.6f}, lr = {lr:.6f}")
+        
+        self.weight_history.append(self.weights.copy())
+    
+    def _fit_adam(self, X, y, sample_weights=None):
+        """
+        Adam (Adaptive Moment Estimation) Optimizer.
+        
+        Adam combines the advantages of:
+        1. Momentum (using first moment - mean of gradients)
+        2. RMSprop (using second moment - uncentered variance of gradients)
+        
+        Update rules:
+        m_t = β₁ * m_{t-1} + (1 - β₁) * g_t          # First moment estimate
+        v_t = β₂ * v_{t-1} + (1 - β₂) * g_t²         # Second moment estimate
+        m̂_t = m_t / (1 - β₁^t)                       # Bias-corrected first moment
+        v̂_t = v_t / (1 - β₂^t)                       # Bias-corrected second moment
+        θ_t = θ_{t-1} - α * m̂_t / (√v̂_t + ε)        # Parameter update
+        
+        Parameters:
+        -----------
+        beta1 : float (default=0.9)
+            Exponential decay rate for first moment estimates
+        beta2 : float (default=0.999)
+            Exponential decay rate for second moment estimates
+        epsilon : float (default=1e-8)
+            Small constant for numerical stability
+        """
+        n_samples = len(y)
+        n_features = X.shape[1]
+        batch_size = self.batch_size if self.batch_size else 32
+        batch_size = min(batch_size, n_samples)
+        
+        # Initialize Adam moments
+        self.m_w = np.zeros(n_features)  # First moment for weights
+        self.v_w = np.zeros(n_features)  # Second moment for weights
+        self.m_b = 0.0  # First moment for bias
+        self.v_b = 0.0  # Second moment for bias
+        self.t = 0  # Timestep
+        
+        best_loss = float('inf')
+        patience_counter = 0
+        best_weights = self.weights.copy()
+        best_bias = self.bias
+        
+        for iteration in range(self.n_iterations):
+            # For Adam, we typically use constant learning rate (or can use schedule)
+            lr = self._get_learning_rate(iteration)
+            self.lr_history.append(lr)
+            
+            # Shuffle data
+            indices = np.random.permutation(n_samples)
+            X_shuffled = X[indices]
+            y_shuffled = y[indices]
+            sw_shuffled = sample_weights[indices] if sample_weights is not None else None
+            
+            # Mini-batch updates with Adam
+            for start_idx in range(0, n_samples, batch_size):
+                end_idx = min(start_idx + batch_size, n_samples)
+                
+                X_batch = X_shuffled[start_idx:end_idx]
+                y_batch = y_shuffled[start_idx:end_idx]
+                sw_batch = sw_shuffled[start_idx:end_idx] if sw_shuffled is not None else None
+                
+                # Forward pass
+                z = np.dot(X_batch, self.weights) + self.bias
+                y_pred = self.sigmoid(z)
+                
+                # Compute gradients
+                dw, db = self._compute_gradients(X_batch, y_batch, y_pred, sw_batch)
+                
+                # Increment timestep
+                self.t += 1
+                
+                # Update first moment estimate (momentum)
+                self.m_w = self.beta1 * self.m_w + (1 - self.beta1) * dw
+                self.m_b = self.beta1 * self.m_b + (1 - self.beta1) * db
+                
+                # Update second moment estimate (RMSprop-like)
+                self.v_w = self.beta2 * self.v_w + (1 - self.beta2) * (dw ** 2)
+                self.v_b = self.beta2 * self.v_b + (1 - self.beta2) * (db ** 2)
+                
+                # Bias correction
+                m_w_corrected = self.m_w / (1 - self.beta1 ** self.t)
+                m_b_corrected = self.m_b / (1 - self.beta1 ** self.t)
+                v_w_corrected = self.v_w / (1 - self.beta2 ** self.t)
+                v_b_corrected = self.v_b / (1 - self.beta2 ** self.t)
+                
+                # Update parameters
+                self.weights -= lr * m_w_corrected / (np.sqrt(v_w_corrected) + self.epsilon)
+                self.bias -= lr * m_b_corrected / (np.sqrt(v_b_corrected) + self.epsilon)
             
             # Compute loss at end of epoch
             z_full = np.dot(X, self.weights) + self.bias
