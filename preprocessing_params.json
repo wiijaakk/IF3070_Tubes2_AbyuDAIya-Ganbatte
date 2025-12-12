@@ -2,15 +2,15 @@
   "imputation_values": {
     "transaction_amount": {
       "type": "mean",
-      "value": 126.85528826585643
+      "value": 145.22011448934856
     },
     "avg_transaction_amount": {
       "type": "mean",
-      "value": 69.96972207704368
+      "value": 70.10941841878766
     },
     "device_trust_score": {
       "type": "mean",
-      "value": 0.4994804828808887
+      "value": 0.49952815689167585
     }
   },
   "encoding_info": {
