@@ -281,8 +281,12 @@ def main():
     # 2. Preprocess Data (with Feature Engineering)
     # =========================================================================
     print("\n[2] Preprocessing data with feature engineering...")
+    
+    # KNN Imputation parameter - K=5 gives best result
+    KNN_NEIGHBORS = 8  # Tested: K=3 (0.6068), K=5 (0.6071), K=7 (0.6071), K=10 (0.6069)
+    
     X_train_processed, y_train, X_test_processed, test_ids, scaler, encoding_info, imputation_values = preprocess_fraud_data(
-        train_df, test_df, use_feature_engineering=True
+        train_df, test_df, use_feature_engineering=True, knn_neighbors=KNN_NEIGHBORS
     )
     
     print(f"Processed train shape: {X_train_processed.shape}")

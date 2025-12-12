@@ -11,6 +11,7 @@ Author: AbyuDAIya-Ganbatte Team
 import numpy as np
 import pandas as pd
 import json
+from sklearn.impute import KNNImputer
 
 
 # =============================================================================
@@ -164,10 +165,13 @@ def k_fold_split(X, y, n_folds=5, random_state=None, stratify=True):
 # MISSING VALUE HANDLING
 # =============================================================================
 
-def handle_missing_values(df, numerical_cols=None, categorical_cols=None):
+def handle_missing_values(df, numerical_cols=None, categorical_cols=None, n_neighbors=5):
     """
-    Handle missing values using mean imputation for numerical columns
+    Handle missing values using KNN imputation for numerical columns
     and mode imputation for categorical columns.
+    
+    KNN Imputation: Uses the k-nearest neighbors to impute missing values
+    based on the similarity of other features.
     
     Parameters:
     -----------
@@ -177,13 +181,15 @@ def handle_missing_values(df, numerical_cols=None, categorical_cols=None):
         List of numerical column names (auto-detected if None)
     categorical_cols : list or None
         List of categorical column names (auto-detected if None)
+    n_neighbors : int
+        Number of neighbors to use for KNN imputation (default: 5)
     
     Returns:
     --------
     df_filled : pd.DataFrame
         DataFrame with imputed values
     imputation_values : dict
-        Dictionary storing the imputation values for each column
+        Dictionary storing the imputation info (KNN imputer for numerical, mode for categorical)
     """
     df_filled = df.copy()
     imputation_values = {}
@@ -194,14 +200,32 @@ def handle_missing_values(df, numerical_cols=None, categorical_cols=None):
     if categorical_cols is None:
         categorical_cols = df.select_dtypes(include=['object', 'category']).columns.tolist()
     
-    # Mean imputation for numerical columns
-    for col in numerical_cols:
-        if col in df_filled.columns and df_filled[col].isnull().any():
-            mean_value = df_filled[col].mean()
-            df_filled[col] = df_filled[col].fillna(mean_value)
-            imputation_values[col] = {'type': 'mean', 'value': mean_value}
+    # KNN imputation for numerical columns
+    numerical_cols_in_df = [col for col in numerical_cols if col in df_filled.columns]
+    if len(numerical_cols_in_df) > 0:
+        # Check if there are any missing values in numerical columns
+        has_missing = df_filled[numerical_cols_in_df].isnull().any().any()
+        
+        if has_missing:
+            print(f"Applying KNN imputation (k={n_neighbors}) for numerical columns...")
+            knn_imputer = KNNImputer(n_neighbors=n_neighbors, weights='distance')
+            
+            # Fit and transform numerical columns
+            numerical_data = df_filled[numerical_cols_in_df].values
+            imputed_data = knn_imputer.fit_transform(numerical_data)
+            
+            # Update DataFrame with imputed values
+            df_filled[numerical_cols_in_df] = imputed_data
+            
+            # Store the fitted imputer for later use on test data
+            imputation_values['knn_imputer'] = knn_imputer
+            imputation_values['numerical_cols'] = numerical_cols_in_df
+        else:
+            # No missing values, but still store column info for consistency
+            imputation_values['knn_imputer'] = None
+            imputation_values['numerical_cols'] = numerical_cols_in_df
     
-    # Mode imputation for categorical columns
+    # Mode imputation for categorical columns (KNN doesn't work well for categorical)
     for col in categorical_cols:
         if col in df_filled.columns and df_filled[col].isnull().any():
             # Get the mode (most frequent value)
@@ -209,7 +233,7 @@ def handle_missing_values(df, numerical_cols=None, categorical_cols=None):
             if len(mode_value) > 0:
                 mode_value = mode_value[0]
                 df_filled[col] = df_filled[col].fillna(mode_value)
-                imputation_values[col] = {'type': 'mode', 'value': mode_value}
+                imputation_values[f'mode_{col}'] = mode_value
     
     return df_filled, imputation_values
 
@@ -217,6 +241,7 @@ def handle_missing_values(df, numerical_cols=None, categorical_cols=None):
 def apply_imputation(df, imputation_values):
     """
     Apply previously computed imputation values to new data.
+    Uses the fitted KNN imputer for numerical columns.
     
     Parameters:
     -----------
@@ -231,9 +256,25 @@ def apply_imputation(df, imputation_values):
     """
     df_filled = df.copy()
     
-    for col, info in imputation_values.items():
-        if col in df_filled.columns and df_filled[col].isnull().any():
-            df_filled[col] = df_filled[col].fillna(info['value'])
+    # Apply KNN imputation for numerical columns
+    if 'knn_imputer' in imputation_values and imputation_values['knn_imputer'] is not None:
+        knn_imputer = imputation_values['knn_imputer']
+        numerical_cols = imputation_values['numerical_cols']
+        
+        # Get columns that exist in df
+        cols_to_impute = [col for col in numerical_cols if col in df_filled.columns]
+        
+        if len(cols_to_impute) > 0 and df_filled[cols_to_impute].isnull().any().any():
+            numerical_data = df_filled[cols_to_impute].values
+            imputed_data = knn_imputer.transform(numerical_data)
+            df_filled[cols_to_impute] = imputed_data
+    
+    # Apply mode imputation for categorical columns
+    for key, value in imputation_values.items():
+        if key.startswith('mode_'):
+            col = key[5:]  # Remove 'mode_' prefix
+            if col in df_filled.columns and df_filled[col].isnull().any():
+                df_filled[col] = df_filled[col].fillna(value)
     
     return df_filled
 
@@ -800,7 +841,7 @@ def create_binned_features(df, col, n_bins=5, strategy='quantile'):
 # FRAUD DATA PREPROCESSING PIPELINE
 # =============================================================================
 
-def preprocess_fraud_data(train_df, test_df, use_feature_engineering=True):
+def preprocess_fraud_data(train_df, test_df, use_feature_engineering=True, knn_neighbors=5):
     """
     Preprocess the fraud detection dataset with advanced feature engineering.
     
@@ -812,6 +853,8 @@ def preprocess_fraud_data(train_df, test_df, use_feature_engineering=True):
         Test data without 'is_fraud' column
     use_feature_engineering : bool
         Whether to apply advanced feature engineering (default: True)
+    knn_neighbors : int
+        Number of neighbors for KNN imputation (default: 5)
     
     Returns:
     --------
@@ -841,7 +884,8 @@ def preprocess_fraud_data(train_df, test_df, use_feature_engineering=True):
     train_filled, imputation_values = handle_missing_values(
         train_features,
         numerical_cols=numerical_cols,
-        categorical_cols=categorical_cols
+        categorical_cols=categorical_cols,
+        n_neighbors=knn_neighbors
     )
     
     # Apply same imputation to test data
