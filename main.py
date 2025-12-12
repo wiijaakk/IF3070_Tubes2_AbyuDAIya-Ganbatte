@@ -289,26 +289,23 @@ def main():
     print(f"Processed test shape: {X_test_processed.shape}")
     
     # =========================================================================
-    # 3. Model Parameters - Using ADAM Optimizer
+    # 3. Model Parameters - Using SAGA Optimizer
     # =========================================================================
     model_params = {
-        'learning_rate': 0.0015,  # Best lr
-        'n_iterations': 3000,
-        'optimizer': "adam",  # ADAM OPTIMIZER
-        'batch_size': 256,
-        'regularization': 0.0006,
+        'learning_rate': 0.0008,  # Slightly lower lr
+        'n_iterations': 50,  # More iterations
+        'optimizer': "saga",  # SAGA OPTIMIZER
+        'batch_size': 256,  # Not used for SAGA
+        'regularization': 0.0008,
         'l1_ratio': 0.5,  # Balanced L1/L2
         'class_weight': "balanced",  # Use balanced class weights
-        'lr_schedule': "constant",  # Adam usually works best with constant lr
-        'beta1': 0.9,  # Standard momentum
-        'beta2': 0.999,  # Second moment decay (RMSprop-like)
-        'epsilon': 1e-8,  # Numerical stability
-        'momentum': 0.0,  # Not used for Adam
+        'lr_schedule': "constant",
+        'momentum': 0.0,
         'nesterov': False,
         'use_focal_loss': False,
         'focal_gamma': 2.0,
         'early_stopping': True,
-        'patience': 350,
+        'patience': 20,
         'tol': 1e-9,
         'verbose': True
     }

@@ -579,9 +579,11 @@ class LogisticRegression:
             self._fit_mini_batch(X, y, sample_weights)
         elif self.optimizer == "adam":
             self._fit_adam(X, y, sample_weights)
+        elif self.optimizer == "saga":
+            self._fit_saga(X, y, sample_weights)
         else:
             raise ValueError(f"Unknown optimizer: {self.optimizer}. "
-                           f"Choose from 'batch', 'sgd', 'mini-batch', or 'adam'.")
+                           f"Choose from 'batch', 'sgd', 'mini-batch', 'adam', or 'saga'.")
         
         return self
     
@@ -851,6 +853,167 @@ class LogisticRegression:
                 # Update parameters
                 self.weights -= lr * m_w_corrected / (np.sqrt(v_w_corrected) + self.epsilon)
                 self.bias -= lr * m_b_corrected / (np.sqrt(v_b_corrected) + self.epsilon)
+            
+            # Compute loss at end of epoch
+            z_full = np.dot(X, self.weights) + self.bias
+            y_pred_full = self.sigmoid(z_full)
+            loss = self.compute_loss(y, y_pred_full, sample_weights)
+            self.loss_history.append(loss)
+            
+            # Early stopping check
+            if self.early_stopping:
+                if loss < best_loss - self.tol:
+                    best_loss = loss
+                    best_weights = self.weights.copy()
+                    best_bias = self.bias
+                    patience_counter = 0
+                else:
+                    patience_counter += 1
+                    if patience_counter >= self.patience:
+                        if self.verbose:
+                            print(f"Early stopping at iteration {iteration}, loss: {loss:.6f}")
+                        self.weights = best_weights
+                        self.bias = best_bias
+                        break
+            
+            if iteration % 10 == 0:
+                self.weight_history.append(self.weights.copy())
+            
+            if self.verbose and iteration % 50 == 0:
+                print(f"Iteration {iteration}: loss = {loss:.6f}, lr = {lr:.6f}")
+        
+        self.weight_history.append(self.weights.copy())
+    
+    def _fit_saga(self, X, y, sample_weights=None):
+        """
+        SAGA (Stochastic Average Gradient Accelerated) Optimizer.
+        
+        SAGA is a variance-reduced stochastic gradient method that achieves
+        linear convergence for strongly convex problems like Logistic Regression.
+        
+        Key idea:
+        - Store gradient for each sample
+        - Update uses: current gradient - old gradient + average gradient
+        - This reduces variance compared to plain SGD
+        
+        Update rule:
+        g_i^{new} = gradient at sample i
+        g_i^{old} = stored gradient for sample i
+        g_avg = average of all stored gradients
+        
+        update = g_i^{new} - g_i^{old} + g_avg
+        θ = θ - lr * update
+        
+        Then update stored gradient: g_i^{old} = g_i^{new}
+        """
+        n_samples = len(y)
+        n_features = X.shape[1]
+        
+        # For SAGA, we compute simple gradients without per-sample weighting
+        # to maintain stability. Class weighting is applied uniformly.
+        
+        # Initialize stored gradients for each sample
+        stored_gradients_w = np.zeros((n_samples, n_features))
+        stored_gradients_b = np.zeros(n_samples)
+        
+        # Class weight multipliers
+        if sample_weights is not None:
+            # Use average class weight for stability
+            avg_weight = np.mean(sample_weights)
+        else:
+            avg_weight = 1.0
+        
+        # Initialize average gradient
+        avg_gradient_w = np.zeros(n_features)
+        avg_gradient_b = 0.0
+        
+        # First pass: compute initial gradients for all samples (simplified)
+        if self.verbose:
+            print("SAGA: Initializing stored gradients...")
+        
+        for i in range(n_samples):
+            xi = X[i]
+            yi = y[i]
+            
+            z = np.dot(xi, self.weights) + self.bias
+            y_pred = self.sigmoid(np.array([z]))[0]
+            
+            # Simple gradient: (pred - true) * x
+            error = y_pred - yi
+            
+            # Apply class weight
+            if sample_weights is not None:
+                error *= sample_weights[i]
+            
+            stored_gradients_w[i] = error * xi
+            stored_gradients_b[i] = error
+            
+            # Add regularization gradient
+            if self.regularization > 0:
+                l2_grad = (1 - self.l1_ratio) * self.weights
+                l1_grad = self.l1_ratio * np.sign(self.weights)
+                stored_gradients_w[i] += self.regularization * (l1_grad + l2_grad) / n_samples
+        
+        # Compute initial average gradient
+        avg_gradient_w = np.mean(stored_gradients_w, axis=0)
+        avg_gradient_b = np.mean(stored_gradients_b)
+        
+        best_loss = float('inf')
+        patience_counter = 0
+        best_weights = self.weights.copy()
+        best_bias = self.bias
+        
+        if self.verbose:
+            print("SAGA: Starting optimization...")
+        
+        for iteration in range(self.n_iterations):
+            lr = self._get_learning_rate(iteration)
+            self.lr_history.append(lr)
+            
+            # Shuffle indices for this epoch
+            indices = np.random.permutation(n_samples)
+            
+            for idx in indices:
+                xi = X[idx]
+                yi = y[idx]
+                
+                # Compute new gradient for this sample
+                z = np.dot(xi, self.weights) + self.bias
+                y_pred = self.sigmoid(np.array([z]))[0]
+                
+                error = y_pred - yi
+                if sample_weights is not None:
+                    error *= sample_weights[idx]
+                
+                new_grad_w = error * xi
+                new_grad_b = error
+                
+                # Add regularization
+                if self.regularization > 0:
+                    l2_grad = (1 - self.l1_ratio) * self.weights
+                    l1_grad = self.l1_ratio * np.sign(self.weights)
+                    new_grad_w = new_grad_w + self.regularization * (l1_grad + l2_grad) / n_samples
+                
+                # Get old stored gradient
+                old_grad_w = stored_gradients_w[idx]
+                old_grad_b = stored_gradients_b[idx]
+                
+                # SAGA update: new_grad - old_grad + average_grad
+                saga_update_w = new_grad_w - old_grad_w + avg_gradient_w
+                saga_update_b = new_grad_b - old_grad_b + avg_gradient_b
+                
+                # Update parameters
+                self.weights -= lr * saga_update_w
+                self.bias -= lr * saga_update_b
+                
+                # Update average gradient incrementally
+                # avg_new = avg_old + (new_grad - old_grad) / n
+                avg_gradient_w += (new_grad_w - old_grad_w) / n_samples
+                avg_gradient_b += (new_grad_b - old_grad_b) / n_samples
+                
+                # Store new gradient
+                stored_gradients_w[idx] = new_grad_w
+                stored_gradients_b[idx] = new_grad_b
             
             # Compute loss at end of epoch
             z_full = np.dot(X, self.weights) + self.bias
