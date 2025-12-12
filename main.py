@@ -292,12 +292,12 @@ def main():
     # 3. Model Parameters
     # =========================================================================
     model_params = {
-        'learning_rate': 0.1,
-        'n_iterations': 500,
+        'learning_rate': 0.07,
+        'n_iterations': 3000,
         'optimizer': "mini-batch",
         'batch_size': 256,
-        'regularization': 0.001,
-        'l1_ratio': 0.0,  # Pure L2 regularization
+        'regularization': 0.0012,
+        'l1_ratio': 0.5,  # Balanced L1/L2
         'class_weight': "balanced",  # Use balanced class weights
         'lr_schedule': "constant",
         'momentum': 0.0,
@@ -305,8 +305,8 @@ def main():
         'use_focal_loss': False,
         'focal_gamma': 2.0,
         'early_stopping': True,
-        'patience': 50,
-        'tol': 1e-6,
+        'patience': 260,
+        'tol': 1e-9,
         'verbose': True
     }
     
@@ -390,17 +390,15 @@ def main():
     threshold_for_14pct = sorted_proba[int(len(sorted_proba) * target_fraud_rate)]
     print(f"\nThreshold for ~14% fraud rate: {threshold_for_14pct:.4f}")
     
-    # Create submission with binary predictions (0 or 1)
-    # Use the best F1 threshold from validation (previously gave 0.58022)
-    final_threshold = best_threshold
-    print(f"Using threshold: {final_threshold:.4f}")
+    # Create submission with probabilities (better for AUC evaluation)
+    print(f"\nSubmitting probabilities for AUC evaluation")
     submission = create_submission(
         model_full, 
         X_test_processed, 
         test_ids, 
         filename="submission.csv",
-        use_probabilities=False,  # Submit binary 0/1 as required
-        threshold=final_threshold
+        use_probabilities=True,  # Submit probabilities for AUC
+        threshold=best_threshold
     )
     
     # =========================================================================
