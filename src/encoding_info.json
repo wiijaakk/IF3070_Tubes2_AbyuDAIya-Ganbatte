@@ -1,0 +1,47 @@
+{
+  "gender": [
+    "F",
+    "M"
+  ],
+  "country": [
+    "AU",
+    "BR",
+    "CA",
+    "DE",
+    "FR",
+    "ID",
+    "IN",
+    "SG",
+    "UK",
+    "US"
+  ],
+  "device_type": [
+    "desktop",
+    "mobile",
+    "tablet"
+  ],
+  "device_os": [
+    "Android",
+    "Linux",
+    "MacOS",
+    "Windows",
+    "iOS"
+  ],
+  "merchant_category": [
+    "clothing",
+    "electronics",
+    "financial",
+    "gas",
+    "groceries",
+    "luxury",
+    "restaurants",
+    "services",
+    "travel"
+  ],
+  "transaction_type": [
+    "purchase",
+    "topup",
+    "transfer",
+    "withdrawal"
+  ]
+}
